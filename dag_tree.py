@@ -121,39 +121,36 @@ def call_model(
             {
                 "type": "function",
                 "name": "create_children",
-                "function": {
-                    "name": "create_children",
-                    "description": "Create child nodes for the current DAG tree node.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "children": {
-                                "type": "array",
-                                "description": "List of child nodes to attach to the parent node.",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "title": {
-                                            "type": "string",
-                                            "description": "Short name for the child node.",
-                                        },
-                                        "description": {
-                                            "type": "string",
-                                            "description": "One or two sentences summarizing the child node.",
-                                        },
+                "description": "Create child nodes for the current DAG tree node.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "children": {
+                            "type": "array",
+                            "description": "List of child nodes to attach to the parent node.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {
+                                        "type": "string",
+                                        "description": "Short name for the child node.",
                                     },
-                                    "required": ["title", "description"],
+                                    "description": {
+                                        "type": "string",
+                                        "description": "One or two sentences summarizing the child node.",
+                                    },
                                 },
-                            }
-                        },
-                        "required": ["children"],
+                                "required": ["title", "description"],
+                            },
+                        }
                     },
+                    "required": ["children"],
                 },
             }
         ],
-        # The Responses API expects the chosen tool referenced by `name`,
-        # not `tool_name` (which the server rejects as an unknown parameter).
-        "tool_choice": {"type": "tool", "name": "create_children"},
+        # The Responses API expects the chosen tool referenced by `name` and `type`;
+        # use the `function` type (not an arbitrary `tool` type).
+        "tool_choice": {"type": "function", "name": "create_children"},
     }
 
     if reasoning_effort is not None:
