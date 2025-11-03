@@ -36,6 +36,28 @@ class Node:
             "children": [child.to_dict() for child in self.children],
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "Node":
+        if not isinstance(payload, dict):
+            raise ValueError("Node payload must be an object.")
+
+        title = payload.get("title")
+        description = payload.get("description")
+        children_payload = payload.get("children", [])
+
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Node title must be a non-empty string.")
+        if not isinstance(description, str):
+            raise ValueError("Node description must be a string.")
+        if children_payload is None:
+            children_payload = []
+        if not isinstance(children_payload, list):
+            raise ValueError("Node children must be a list if provided.")
+
+        children = [cls.from_dict(child) for child in children_payload]
+
+        return cls(title=title.strip(), description=description, children=children)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -74,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to write the tree JSON incrementally while expanding. "
             "Defaults to the prompt file name with a .json suffix."
+        ),
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        help=(
+            "Optional path to an existing tree JSON file to continue expanding. "
+            "Expansion will resume from the leaf nodes in this tree."
         ),
     )
     parser.add_argument(
@@ -212,6 +242,33 @@ def call_model(
     return validated_children
 
 
+def collect_expandable_nodes(root: Node, max_depth: int) -> deque[
+    tuple[Node, List[str], list[tuple[list[str], str]], int]
+]:
+    work_queue: deque[tuple[Node, List[str], list[tuple[list[str], str]], int]] = deque()
+
+    def traverse(
+        node: Node,
+        path: List[str],
+        lineage: list[tuple[list[str], str]],
+        depth: int,
+    ) -> None:
+        if depth >= max_depth:
+            return
+
+        if not node.children:
+            work_queue.append((node, path, lineage, depth))
+            return
+
+        for child in node.children:
+            child_path = path + [child.title]
+            child_lineage = lineage + [(child_path, child.description)]
+            traverse(child, child_path, child_lineage, depth + 1)
+
+    traverse(root, [root.title], [([root.title], root.description)], 0)
+    return work_queue
+
+
 def expand_tree(
     client: OpenAI,
     model: str,
@@ -225,9 +282,7 @@ def expand_tree(
 ) -> None:
     """Expand the tree using a work queue with limited parallel API calls."""
 
-    work_queue: deque[tuple[Node, List[str], list[tuple[list[str], str]], int]] = deque(
-        [(root, [root.title], [([root.title], root.description)], 0)]
-    )
+    work_queue = collect_expandable_nodes(root, max_depth)
 
     in_flight: dict[
         Future[List[dict]],
@@ -304,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.output is not None:
         output_path = args.output
+    elif args.resume_from is not None:
+        output_path = args.resume_from
     else:
         if args.prompt_file.suffix:
             output_path = args.prompt_file.with_suffix(
@@ -315,9 +372,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.concurrency < 1:
         parser.error("--concurrency must be at least 1.")
 
-    client = OpenAI()
+    if args.resume_from is not None:
+        try:
+            resume_payload = json.loads(
+                args.resume_from.read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            parser.error(f"Unable to read resume file: {exc}")
+        except json.JSONDecodeError as exc:
+            parser.error(f"Resume file is not valid JSON: {exc}")
 
-    root = Node(title="root", description=prompt_text.strip() or "(empty prompt)")
+        try:
+            root = Node.from_dict(resume_payload)
+        except ValueError as exc:
+            parser.error(f"Resume file does not contain a valid tree: {exc}")
+    else:
+        root = Node(title="root", description=prompt_text.strip() or "(empty prompt)")
+
+    client = OpenAI()
 
     def save_tree() -> None:
         payload = json.dumps(root.to_dict(), indent=2, ensure_ascii=False)
@@ -334,10 +406,14 @@ def main(argv: list[str] | None = None) -> int:
 
     save_tree()
 
+    base_prompt_text = prompt_text
+    if not base_prompt_text.strip():
+        base_prompt_text = root.description
+
     expand_tree(
         client=client,
         model=args.model,
-        base_prompt=prompt_text,
+        base_prompt=base_prompt_text,
         root=root,
         max_depth=args.max_depth,
         max_concurrency=args.concurrency,
