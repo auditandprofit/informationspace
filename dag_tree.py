@@ -120,6 +120,7 @@ def call_model(
         "tools": [
             {
                 "type": "function",
+                "name": "create_children",
                 "function": {
                     "name": "create_children",
                     "description": "Create child nodes for the current DAG tree node.",
@@ -150,7 +151,7 @@ def call_model(
                 },
             }
         ],
-        "tool_choice": {"type": "function", "name": "create_children"},
+        "tool_choice": {"type": "tool", "name": "create_children"},
     }
 
     if reasoning_effort is not None:
