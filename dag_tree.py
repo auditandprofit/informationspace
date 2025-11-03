@@ -59,6 +59,22 @@ class Node:
         return cls(title=title.strip(), description=description, children=children)
 
 
+def count_nodes_and_paths(root: "Node") -> tuple[int, set[tuple[str, ...]]]:
+    """Return the number of nodes and the set of unique paths in the tree."""
+
+    unique_paths: set[tuple[str, ...]] = set()
+
+    def traverse(node: Node, path: list[str]) -> int:
+        unique_paths.add(tuple(path))
+        total = 1
+        for child in node.children:
+            total += traverse(child, path + [child.title])
+        return total
+
+    total_nodes = traverse(root, [root.title])
+    return total_nodes, unique_paths
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -308,16 +324,26 @@ def expand_tree(
 
     work_queue = collect_expandable_nodes(root, max_depth)
 
+    total_nodes, unique_paths = count_nodes_and_paths(root)
     in_flight: dict[
         Future[List[dict]],
         tuple[Node, List[str], list[tuple[list[str], str]], int],
     ] = {}
 
     with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-        print("In-flight requests:   0", end="", flush=True)
+        print("Total nodes | Unique paths | In-flight requests")
 
-        def update_inflight_status() -> None:
-            print(f"\rIn-flight requests: {len(in_flight):3d}", end="", flush=True)
+        def format_status() -> str:
+            return (
+                f"Total nodes: {total_nodes:5d} | "
+                f"Unique paths: {len(unique_paths):5d} | "
+                f"In-flight requests: {len(in_flight):3d}"
+            )
+
+        print(format_status(), end="", flush=True)
+
+        def update_status() -> None:
+            print(f"\r{format_status()}", end="", flush=True)
 
         while work_queue or in_flight:
             while work_queue and len(in_flight) < max_concurrency:
@@ -335,10 +361,10 @@ def expand_tree(
                     service_tier,
                 )
                 in_flight[future] = (node, path, lineage, depth)
-                update_inflight_status()
+                update_status()
 
             if not in_flight:
-                update_inflight_status()
+                update_status()
                 continue
 
             done, _ = wait(in_flight.keys(), return_when=FIRST_COMPLETED)
@@ -353,6 +379,7 @@ def expand_tree(
                     ) from exc
 
                 new_children: list[Node] = []
+                new_child_count = 0
                 for child in child_dicts:
                     child_node = Node(
                         title=child["title"], description=child["description"]
@@ -363,14 +390,18 @@ def expand_tree(
                         (child_path, child_node.description)
                     ]
                     work_queue.append((child_node, child_path, child_lineage, depth + 1))
+                    unique_paths.add(tuple(child_path))
+                    new_child_count += 1
 
                 if new_children:
                     node.children.extend(new_children)
+                    total_nodes += new_child_count
                     save_tree()
+                    update_status()
 
-            update_inflight_status()
+            update_status()
 
-        print("\rIn-flight requests:   0")
+        print(f"\r{format_status()}")
 
 
 def main(argv: list[str] | None = None) -> int:
